@@ -1,0 +1,99 @@
+cmake_minimum_required(VERSION 3.15)
+project(WildfireSimulator VERSION 1.0 LANGUAGES CXX)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Compiler flags for optimization
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native")
+
+# Find required packages
+find_package(GDAL REQUIRED)
+
+# Find OpenMP (with macOS Homebrew support)
+if(APPLE)
+    # Try to find llvm's libomp
+    execute_process(
+        COMMAND brew --prefix llvm
+        OUTPUT_VARIABLE LLVM_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(LLVM_PREFIX)
+        set(LLVM_PREFIX ${LLVM_PREFIX} CACHE STRING "LLVM install prefix")
+        set(OpenMP_C_FLAGS "-Xpreprocessor -fopenmp -I${LLVM_PREFIX}/include")
+        set(OpenMP_C_LIB_NAMES "omp")
+        set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I${LLVM_PREFIX}/include")
+        set(OpenMP_CXX_LIB_NAMES "omp")
+        set(OpenMP_omp_LIBRARY "${LLVM_PREFIX}/lib/libomp.dylib")
+        message(STATUS "Found LLVM libomp at: ${LLVM_PREFIX}")
+    endif()
+endif()
+
+find_package(OpenMP)
+
+# JSON library (header-only)
+include(FetchContent)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+)
+FetchContent_MakeAvailable(json)
+
+# Include directories
+include_directories(
+    ${PROJECT_SOURCE_DIR}/include
+    ${GDAL_INCLUDE_DIRS}
+)
+
+# Source files
+set(SOURCES
+    src/main.cpp
+    src/FireSpreadModel.cpp
+    src/GeoDataLoader.cpp
+)
+
+# Executable
+add_executable(wildfire_simulator ${SOURCES})
+
+# Link libraries
+target_link_libraries(wildfire_simulator
+    ${GDAL_LIBRARIES}
+    nlohmann_json::nlohmann_json
+)
+
+# Link OpenMP if found
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(wildfire_simulator OpenMP::OpenMP_CXX)
+    if(APPLE AND LLVM_PREFIX)
+        # Find omp.h in clang includes
+        file(GLOB_RECURSE OMP_H_PATH "${LLVM_PREFIX}/lib/clang/*/include/omp.h")
+        if(OMP_H_PATH)
+            get_filename_component(OMP_INCLUDE_DIR "${OMP_H_PATH}" DIRECTORY)
+            target_include_directories(wildfire_simulator PRIVATE ${OMP_INCLUDE_DIR})
+            message(STATUS "Found omp.h at: ${OMP_INCLUDE_DIR}")
+        endif()
+        target_include_directories(wildfire_simulator PRIVATE ${LLVM_PREFIX}/include)
+        target_link_directories(wildfire_simulator PRIVATE ${LLVM_PREFIX}/lib)
+        target_compile_options(wildfire_simulator PRIVATE -Xpreprocessor -fopenmp)
+    endif()
+    message(STATUS "OpenMP enabled - parallel execution available")
+else()
+    message(WARNING "OpenMP not found - will run in serial mode (slower)")
+endif()
+
+# Install target
+install(TARGETS wildfire_simulator DESTINATION bin)
+
+# Print build configuration
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "C++ Compiler: ${CMAKE_CXX_COMPILER}")
+message(STATUS "OpenMP found: ${OpenMP_CXX_FOUND}")
+if(OpenMP_CXX_FOUND)
+    message(STATUS "OpenMP flags: ${OpenMP_CXX_FLAGS}")
+endif()
+message(STATUS "GDAL include: ${GDAL_INCLUDE_DIRS}")
+message(STATUS "GDAL libraries: ${GDAL_LIBRARIES}")

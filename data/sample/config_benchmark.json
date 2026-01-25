@@ -1,0 +1,19 @@
+{
+    "run_id": 99,
+    "fuel_data_file": "data/sample/test_fuel_model.tif",
+    "elevation_data_file": "data/sample/test_elevation.tif",
+    "ignition_point": {
+        "x": 150,
+        "y": 150
+    },
+    "wind": {
+        "speed": 15,
+        "direction": 270
+    },
+    "fuel_moisture": 8.0,
+    "simulation_steps": 120,
+    "time_step": 1.0,
+    "output_dir": "output",
+    "cell_size": 30.0,
+    "description": "Benchmark configuration for performance testing"
+}

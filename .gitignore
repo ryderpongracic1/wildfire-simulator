@@ -1,0 +1,51 @@
+# Build directories
+cpp/build/
+*.o
+*.a
+*.so
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+venv/
+env/
+
+# Output files
+output/
+*.json
+!config*.json
+!data/sample/*.json
+
+# Data files (can be large)
+data/*.tif
+data/*.tiff
+!data/sample/*.tif
+
+# Database
+*.db
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# System
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Benchmark results
+benchmark_results.txt

@@ -1,0 +1,18 @@
+{
+    "run_id": 1,
+    "fuel_data_file": "data/sample/test_fuel_model.tif",
+    "elevation_data_file": "data/sample/test_elevation.tif",
+    "ignition_point": {
+        "x": 150,
+        "y": 150
+    },
+    "wind": {
+        "speed": 12,
+        "direction": 270
+    },
+    "fuel_moisture": 8.0,
+    "simulation_steps": 60,
+    "time_step": 1.0,
+    "output_dir": "output",
+    "cell_size": 30.0
+}

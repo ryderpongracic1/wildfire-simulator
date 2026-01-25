@@ -1,0 +1,22 @@
+{
+  "run_id": 10,
+  "fuel_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/california_fuel_model.tif",
+  "elevation_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/california_elevation_aligned.tif",
+  "ignition_point": {
+    "x": 50,
+    "y": 50,
+    "note": "Adjust based on actual grid dimensions after loading"
+  },
+  "wind": {
+    "speed": 15,
+    "direction": 270,
+    "note": "15 mph from West (common California pattern)"
+  },
+  "fuel_moisture": 6.0,
+  "simulation_steps": 120,
+  "time_step": 1.0,
+  "output_dir": "output",
+  "cell_size": 250.0,
+  "region": "California - Santa Barbara/Ventura",
+  "description": "Standard 250m resolution - faster simulation"
+}

@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wildfire Spread Simulator</title>
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #ff6b35 0%, #d84315 100%);
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            color: white;
+        }
+
+        .container {
+            display: flex;
+            height: calc(100vh - 80px);
+        }
+
+        .sidebar {
+            width: 350px;
+            background: #2a2a2a;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+        }
+
+        .map-container {
+            flex: 1;
+            position: relative;
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        .control-panel {
+            background: #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        .control-panel h3 {
+            margin: 0 0 15px 0;
+            color: #ff6b35;
+            font-size: 16px;
+            border-bottom: 2px solid #ff6b35;
+            padding-bottom: 8px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+            color: #b0b0b0;
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #444;
+            border-radius: 4px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #ff6b35;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #ff6b35 0%, #d84315 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 10px rgba(255,107,53,0.4);
+        }
+
+        .btn-primary:disabled {
+            background: #555;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .time-control {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            right: 20px;
+            background: rgba(42, 42, 42, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+
+        .time-slider {
+            width: 100%;
+            margin: 10px 0;
+        }
+
+        .time-display {
+            text-align: center;
+            font-size: 18px;
+            margin-bottom: 10px;
+            color: #ff6b35;
+            font-weight: bold;
+        }
+
+        .playback-controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 10px;
+        }
+
+        .playback-controls button {
+            padding: 8px 16px;
+            background: #444;
+            border: none;
+            border-radius: 4px;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .playback-controls button:hover {
+            background: #555;
+        }
+
+        .stats {
+            background: #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #444;
+        }
+
+        .stat-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .stat-label {
+            color: #b0b0b0;
+            font-size: 13px;
+        }
+
+        .stat-value {
+            color: #ff6b35;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .simulation-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .simulation-item {
+            background: #333;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .simulation-item:hover {
+            background: #3a3a3a;
+            transform: translateX(5px);
+        }
+
+        .simulation-item.active {
+            background: #ff6b35;
+            color: white;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .status-running {
+            background: #2196F3;
+            color: white;
+        }
+
+        .status-completed {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .status-failed {
+            background: #f44336;
+            color: white;
+        }
+
+        .legend {
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 8px;
+            border-radius: 3px;
+        }
+
+        .spinner {
+            border: 3px solid #333;
+            border-top: 3px solid #ff6b35;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔥 Wildfire Spread Simulator</h1>
+    </div>
+
+    <div class="container">
+        <div class="sidebar">
+            <div class="control-panel">
+                <h3>New Simulation</h3>
+                <div class="form-group">
+                    <label>Fuel Data File <span style="color: #888; font-size: 11px;">(Anderson 13 format only)</span></label>
+                    <select id="fuelFile">
+                        <option value="">Select fuel data...</option>
+                    </select>
+                    <div style="font-size: 11px; color: #888; margin-top: 5px;">
+                        ✓ = Compatible fuel model format
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Elevation Data File</label>
+                    <select id="elevationFile">
+                        <option value="">Select elevation data...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Ignition Point X (Grid)</label>
+                    <input type="number" id="ignitionX" value="400" min="0">
+                </div>
+                <div class="form-group">
+                    <label>Ignition Point Y (Grid)</label>
+                    <input type="number" id="ignitionY" value="400" min="0">
+                </div>
+                <div class="form-group">
+                    <label>Wind Speed (mph)</label>
+                    <input type="number" id="windSpeed" value="20" min="0" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label>Wind Direction (degrees from N)</label>
+                    <input type="number" id="windDirection" value="45" min="0" max="360" step="1">
+                </div>
+                <div class="form-group">
+                    <label>Fuel Moisture (%)</label>
+                    <input type="number" id="fuelMoisture" value="5" min="0" max="100" step="1">
+                </div>
+                <div class="form-group">
+                    <label>Simulation Steps</label>
+                    <input type="number" id="simSteps" value="120" min="1" max="1000">
+                </div>
+                <button class="btn btn-primary" id="runSimBtn">Run Simulation</button>
+            </div>
+
+            <div class="control-panel">
+                <h3>Upload Custom Data</h3>
+                <div style="font-size: 12px; color: #b0b0b0; margin-bottom: 15px; line-height: 1.5;">
+                    Upload your own GeoTIFF files. Fuel data must use <strong>Anderson 13 fuel models</strong> (values 0-13).
+                    <a href="#" id="showFormatInfo" style="color: #ff6b35;">Learn more</a>
+                </div>
+                <div class="form-group">
+                    <label>Fuel Data (.tif)</label>
+                    <input type="file" id="uploadFuel" accept=".tif,.tiff" style="padding: 5px;">
+                </div>
+                <div class="form-group">
+                    <label>Elevation Data (.tif)</label>
+                    <input type="file" id="uploadElevation" accept=".tif,.tiff" style="padding: 5px;">
+                </div>
+                <button class="btn btn-primary" id="uploadBtn" style="background: #555;">Upload Files</button>
+                <div id="uploadStatus" style="margin-top: 10px; font-size: 12px;"></div>
+            </div>
+
+            <div class="control-panel">
+                <h3>Current Simulation Stats</h3>
+                <div class="stats" id="statsPanel">
+                    <div class="stat-item">
+                        <span class="stat-label">Status</span>
+                        <span class="stat-value" id="statStatus">-</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Burned Cells</span>
+                        <span class="stat-value" id="statBurned">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Burned Area</span>
+                        <span class="stat-value" id="statArea">0 ha</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Simulation Time</span>
+                        <span class="stat-value" id="statSimTime">0 min</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Performance</span>
+                        <span class="stat-value" id="statPerf">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="control-panel">
+                <h3>Recent Simulations</h3>
+                <div class="simulation-list" id="simulationList">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="map-container">
+            <div id="map"></div>
+
+            <div class="time-control" id="timeControl" style="display: none;">
+                <div class="time-display" id="timeDisplay">Time: 0 minutes (0.0 hours)</div>
+                <input type="range" class="time-slider" id="timeSlider" min="0" max="100" value="0">
+                <div class="playback-controls">
+                    <button id="playBtn">▶ Play</button>
+                    <button id="pauseBtn" style="display:none;">⏸ Pause</button>
+                    <button id="resetBtn">⏮ Reset</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <script>
+        // Define NAD83 Conus Albers projection (EPSG:5070)
+        proj4.defs("EPSG:5070", "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs");
+    </script>
+    <script src="app.js"></script>
+</body>
+</html>

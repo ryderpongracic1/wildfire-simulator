@@ -1,0 +1,35 @@
+# Exclude build artifacts
+cpp/build/
+**/*.o
+**/*.a
+**/*.so
+**/*.dylib
+**/CMakeCache.txt
+**/CMakeFiles/
+
+# Exclude output files
+output/
+**/*.json
+
+# Exclude Python cache
+__pycache__/
+*.pyc
+*.pyo
+**/.Python
+
+# Exclude git
+.git/
+.gitignore
+
+# Exclude IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Exclude macOS
+.DS_Store
+
+# Exclude data files (too large)
+data/**/*.tif
+!data/sample/*.tif

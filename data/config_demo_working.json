@@ -1,0 +1,22 @@
+{
+  "run_id": 300,
+  "fuel_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/demo_fuel_ventura_anderson13.tif",
+  "elevation_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/demo_elevation_ventura.tif",
+  "ignition_point": {
+    "x": 400,
+    "y": 400,
+    "note": "Center of Ventura region - should have burnable fuel"
+  },
+  "wind": {
+    "speed": 20,
+    "direction": 45,
+    "note": "20 mph from NE (Santa Ana winds)"
+  },
+  "fuel_moisture": 5.0,
+  "simulation_steps": 120,
+  "time_step": 1.0,
+  "output_dir": "output",
+  "cell_size": 30.0,
+  "region": "Ventura - Working Demo",
+  "description": "800x800 Ventura with Anderson 13 fuel models - FIRE WILL SPREAD!"
+}

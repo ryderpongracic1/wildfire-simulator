@@ -1,0 +1,40 @@
+# Dockerfile for C++ Wildfire Simulator
+FROM ubuntu:22.04
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    libgdal-dev \
+    gdal-bin \
+    libomp-dev \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy source code
+COPY cpp /app/cpp
+
+# Build the simulator
+RUN mkdir -p /app/cpp/build && \
+    cd /app/cpp/build && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && \
+    make -j$(nproc)
+
+# Create output directory
+RUN mkdir -p /app/output /app/data
+
+# Set environment for OpenMP
+ENV OMP_NUM_THREADS=8
+ENV OMP_PROC_BIND=true
+ENV OMP_PLACES=cores
+
+WORKDIR /app
+
+CMD ["tail", "-f", "/dev/null"]

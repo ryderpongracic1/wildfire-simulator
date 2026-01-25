@@ -1,0 +1,19 @@
+{
+    "run_id": 2,
+    "fuel_data_file": "data/sample/test_fuel_model.tif",
+    "elevation_data_file": "data/sample/test_elevation.tif",
+    "ignition_point": {
+        "x": 150,
+        "y": 100
+    },
+    "wind": {
+        "speed": 25,
+        "direction": 180
+    },
+    "fuel_moisture": 6.0,
+    "simulation_steps": 120,
+    "time_step": 1.0,
+    "output_dir": "output",
+    "cell_size": 30.0,
+    "description": "High wind scenario - Extreme fire behavior with strong southerly winds and low fuel moisture"
+}

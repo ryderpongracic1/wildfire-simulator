@@ -1,0 +1,22 @@
+{
+  "run_id": 200,
+  "fuel_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/demo_fuel_ventura.tif",
+  "elevation_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/demo_elevation_ventura.tif",
+  "ignition_point": {
+    "x": 230,
+    "y": 403,
+    "note": "Burnable fuel type 121 in Ventura area"
+  },
+  "wind": {
+    "speed": 20,
+    "direction": 45,
+    "note": "20 mph from NE (Santa Ana winds)"
+  },
+  "fuel_moisture": 5.0,
+  "simulation_steps": 120,
+  "time_step": 1.0,
+  "output_dir": "output",
+  "cell_size": 30.0,
+  "region": "Ventura Demo - Fast & Realistic",
+  "description": "800x800 Ventura region with real fuel data - runs in <1 second"
+}

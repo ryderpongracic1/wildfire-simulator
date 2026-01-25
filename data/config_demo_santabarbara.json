@@ -1,0 +1,22 @@
+{
+  "run_id": 100,
+  "fuel_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/demo_fuel_santabarbara.tif",
+  "elevation_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/demo_elevation_santabarbara.tif",
+  "ignition_point": {
+    "x": 400,
+    "y": 450,
+    "note": "Center of Santa Barbara demo region"
+  },
+  "wind": {
+    "speed": 15,
+    "direction": 270,
+    "note": "15 mph from West (typical onshore flow)"
+  },
+  "fuel_moisture": 6.0,
+  "simulation_steps": 120,
+  "time_step": 1.0,
+  "output_dir": "output",
+  "cell_size": 30.0,
+  "region": "Santa Barbara Demo - Fast",
+  "description": "Small Santa Barbara subset for quick demo - runs in seconds"
+}

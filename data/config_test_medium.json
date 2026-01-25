@@ -1,0 +1,20 @@
+{
+  "run_id": 201,
+  "fuel_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/test_fuel_medium.tif",
+  "elevation_data_file": "/Users/ryderpongracic/Documents/GitHub/wildfire/wildfire-simulator/data/test_elevation_medium.tif",
+  "ignition_point": {
+    "x": 10,
+    "y": 10
+  },
+  "wind": {
+    "speed": 15,
+    "direction": 270
+  },
+  "fuel_moisture": 8.0,
+  "simulation_steps": 60,
+  "time_step": 1.0,
+  "output_dir": "output",
+  "cell_size": 100.0,
+  "region": "Santa Barbara - Tiny Test Area (2km x 2km)",
+  "description": "20x20 grid, fast (~2 sec)"
+}
