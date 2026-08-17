@@ -20,23 +20,16 @@ services:
       timeout: 5s
       retries: 5
 
-  # C++ Simulator (build and run)
-  simulator:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.simulator
-    container_name: wildfire_simulator
-    depends_on:
-      database:
-        condition: service_healthy
-    volumes:
-      - ./data:/app/data
-      - ./output:/app/output
-    environment:
-      OMP_NUM_THREADS: 8
-    command: tail -f /dev/null  # Keep container running
+  # C++ Simulator
+  #
+  # There is no separate simulator service: it existed only to be a target for
+  # `docker exec` from the API (its command was `tail -f /dev/null`), which
+  # required mounting the host's docker socket into the API container. The
+  # simulator binary is now built into the API image by docker/Dockerfile.api
+  # and run as a subprocess. docker/Dockerfile.simulator is kept as a
+  # standalone build/run environment for CLI use.
 
-  # Flask API
+  # Flask API (also runs the simulator)
   api:
     build:
       context: .
@@ -49,19 +42,23 @@ services:
       - "5001:5000"
     volumes:
       - ./api:/app/api
-      - ./cpp:/app/cpp
       - ./data:/app/data
       - ./output:/app/output
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       DB_HOST: database
       DB_PORT: 5432
       DB_NAME: wildfire_db
       DB_USER: postgres
       DB_PASSWORD: postgres
-      SIMULATOR_BIN: /app/cpp/build/wildfire_simulator
+      SIMULATOR_BIN: /usr/local/bin/wildfire_simulator
       DATA_DIR: /app/data
       OUTPUT_DIR: /app/output
+      # At most this many simulations run at once; the rest queue as 'pending'.
+      SIM_MAX_WORKERS: 2
+      SIM_TIMEOUT_SECONDS: 3600
+      # Threads per simulation. SIM_MAX_WORKERS * OMP_NUM_THREADS is the peak
+      # core demand, so keep the product at or below the host's core count.
+      OMP_NUM_THREADS: 4
       FLASK_ENV: development
     command: python /app/api/app.py
 

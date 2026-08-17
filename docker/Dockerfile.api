@@ -1,14 +1,43 @@
-# Dockerfile for Flask API
-FROM python:3.11-slim
+# Dockerfile for the Flask API, which now also carries the simulator binary.
+#
+# Stage 1 builds the C++ simulator; stage 2 is the Python runtime with the
+# binary copied in. The API invokes the simulator as a local subprocess, so it
+# no longer needs the host's docker socket or a sibling container to exec into.
+# This image previously installed the entire Docker engine (via get.docker.com)
+# purely to run `docker exec`.
+#
+# Both stages derive from the same pinned Debian base on purpose: the binary
+# links GDAL and libgomp dynamically, so a builder on a different distro would
+# produce a binary whose library sonames the runtime does not have. The base is
+# pinned to bookworm because the runtime GDAL package name below encodes GDAL's
+# soname (bookworm ships GDAL 3.6 as libgdal32).
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
+FROM python:3.11-slim-bookworm AS simulator-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# git is required because CMake fetches nlohmann/json via FetchContent.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    libgdal-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY cpp /build/cpp
+RUN cmake -S /build/cpp -B /build/cpp/build -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build /build/cpp/build --target wildfire_simulator -j "$(nproc)"
+
+
+FROM python:3.11-slim-bookworm
+
+# Runtime shared libraries for the simulator. libgdal32 is GDAL 3.6 as shipped
+# by Debian bookworm; if this base image is bumped to a newer Debian, this
+# package name changes with GDAL's soname. libgomp1 is the OpenMP runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgdal32 \
+    libgomp1 \
     postgresql-client \
-    curl \
-    && curl -fsSL https://get.docker.com -o get-docker.sh \
-    && sh get-docker.sh \
-    && rm get-docker.sh \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -21,6 +50,10 @@ RUN pip install --no-cache-dir -r /app/api/requirements.txt
 # Copy application code
 COPY api /app/api
 
+# Copy the simulator built in stage 1
+COPY --from=simulator-builder /build/cpp/build/wildfire_simulator \
+     /usr/local/bin/wildfire_simulator
+
 # Create necessary directories
 RUN mkdir -p /app/output /app/data
 
@@ -29,5 +62,6 @@ EXPOSE 5000
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV SIMULATOR_BIN=/usr/local/bin/wildfire_simulator
 
 CMD ["python", "/app/api/app.py"]
