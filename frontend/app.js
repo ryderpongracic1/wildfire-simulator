@@ -1,6 +1,76 @@
 // Wildfire Simulator Frontend Application
 
-const API_BASE = 'http://localhost:5001/api';
+// ---------------------------------------------------------------------------
+// API base resolution
+// ---------------------------------------------------------------------------
+// Default is the RELATIVE path '/api', which is correct for every deployment
+// that serves the frontend and proxies the API from the same origin — that
+// includes the nginx container in docker-compose (see docker/nginx.conf, which
+// proxies /api/ -> api:5000).
+//
+// Overrides, in priority order, for running the frontend off a bare static
+// server (e.g. `python -m http.server 8080`) where nothing proxies /api:
+//   1. ?api=<base>            e.g. http://localhost:8080/?api=http://localhost:5001/api
+//   2. window.API_BASE = ...  set by an inline <script> before app.js loads
+//   3. automatic fallback: if the initial GET <base>/api/health probe fails,
+//      retry against DEV_API_FALLBACK below and use it if that responds.
+const DEFAULT_API_BASE = '/api';
+const DEV_API_FALLBACK = 'http://localhost:5001/api';
+
+let API_BASE = DEFAULT_API_BASE;
+
+function configuredApiBase() {
+    try {
+        const fromQuery = new URLSearchParams(window.location.search).get('api');
+        if (fromQuery) return fromQuery.replace(/\/+$/, '');
+    } catch (e) {
+        // window.location unavailable (non-browser host) - fall through
+    }
+    if (typeof window !== 'undefined' && window.API_BASE) {
+        return String(window.API_BASE).replace(/\/+$/, '');
+    }
+    return null;
+}
+
+async function probeHealth(base) {
+    try {
+        const response = await fetch(`${base}/health`, { method: 'GET' });
+        return response.ok;
+    } catch (e) {
+        return false;
+    }
+}
+
+// Picks the API base once at startup. Explicit overrides are trusted without a
+// probe; the default is probed so manual (unproxied) mode degrades gracefully.
+async function resolveApiBase() {
+    const explicit = configuredApiBase();
+    if (explicit) {
+        API_BASE = explicit;
+        return API_BASE;
+    }
+
+    if (await probeHealth(DEFAULT_API_BASE)) {
+        API_BASE = DEFAULT_API_BASE;
+        return API_BASE;
+    }
+
+    if (await probeHealth(DEV_API_FALLBACK)) {
+        API_BASE = DEV_API_FALLBACK;
+        console.info(
+            `No API at ${DEFAULT_API_BASE} - falling back to ${DEV_API_FALLBACK}. ` +
+            'Pass ?api=<base> to pin an explicit API base.'
+        );
+        return API_BASE;
+    }
+
+    API_BASE = DEFAULT_API_BASE;
+    setSimStatus(
+        'Cannot reach the API. Start the stack (docker compose up) or pass ?api=&lt;base&gt;.',
+        'error'
+    );
+    return API_BASE;
+}
 
 // Global state
 let map;
@@ -13,9 +83,110 @@ let fireLayer = null;
 let perimeterLayer = null;
 let ignitionMarker = null;
 
-// Initialize map
+// Stop polling a run after this long; a queued run waiting on the API's
+// bounded worker pool would otherwise poll every 2s forever.
+const POLL_INTERVAL_MS = 2000;
+const POLL_MAX_DURATION_MS = 10 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Coordinate handling (F1)
+// ---------------------------------------------------------------------------
+// Snapshot perimeters come back as GeoJSON in whatever CRS the source raster
+// used: the API stores the simulator's geo coordinates verbatim and labels them
+// SRID 4326 without reprojecting. LANDFIRE rasters are natively EPSG:5070
+// (NAD83 Conus Albers, metres); this repo's own sample data
+// (data/sample/generate_test_data.py) is EPSG:4326 degrees. The JSON carries no
+// CRS tag, so we discriminate by magnitude: anything inside the degree domain
+// is treated as already-WGS84, everything else as Albers metres.
+//
+// PROPER FIX (API-side follow-up, not done here): have the C++ exporter write
+// the raster's CRS into the snapshot JSON and the API carry it through to the
+// client, so this heuristic can be replaced with the real answer.
+const WGS84_MAX_LON = 180;
+const WGS84_MAX_LAT = 90;
+
+// True when every coordinate in the ring is a plausible lon/lat degree pair.
+// Pure function - unit tested in frontend/crs_test.js.
+function looksLikeWgs84(ring) {
+    if (!Array.isArray(ring) || ring.length === 0) return false;
+    return ring.every(coord =>
+        Array.isArray(coord) &&
+        coord.length >= 2 &&
+        Number.isFinite(coord[0]) &&
+        Number.isFinite(coord[1]) &&
+        Math.abs(coord[0]) <= WGS84_MAX_LON &&
+        Math.abs(coord[1]) <= WGS84_MAX_LAT
+    );
+}
+
+// Default projector: EPSG:5070 (metres) -> [lon, lat]. Injected as a parameter
+// everywhere below so the geometry code stays testable without proj4/Leaflet.
+function albersToLonLat(x, y) {
+    return proj4('EPSG:5070', 'EPSG:4326', [x, y]);
+}
+
+// Converts one GeoJSON ring ([[x, y], ...]) to Leaflet [lat, lon] pairs,
+// skipping the projection when the ring is already in degrees.
+// Pure function - unit tested in frontend/crs_test.js.
+function ringToLatLngs(ring, transform = albersToLonLat) {
+    if (!Array.isArray(ring)) return [];
+    const alreadyWgs84 = looksLikeWgs84(ring);
+    return ring.map(coord => {
+        const x = coord[0];
+        const y = coord[1];
+        if (alreadyWgs84) return [y, x];
+        const projected = transform(x, y);
+        return [projected[1], projected[0]];
+    });
+}
+
+// Mean of a list of [lat, lon] pairs, or null when the list is empty.
+// Pure function - unit tested in frontend/crs_test.js.
+function latLngsCentroid(latLngs) {
+    if (!Array.isArray(latLngs) || latLngs.length === 0) return null;
+    const sum = latLngs.reduce(
+        (acc, p) => [acc[0] + p[0], acc[1] + p[1]],
+        [0, 0]
+    );
+    return [sum[0] / latLngs.length, sum[1] / latLngs.length];
+}
+
+// Single entry point for perimeter geometry: accepts the snapshot's GeoJSON
+// (Polygon, or MultiPolygon should a PostGIS version return one) and yields
+// Leaflet-ready rings plus their centroid. Replaces three copies of the
+// transform-and-average logic that used to live in loadSimulation and
+// displaySnapshot.
+// Pure function - unit tested in frontend/crs_test.js.
+function projectPerimeter(geojson, transform = albersToLonLat) {
+    const empty = { rings: [], center: null };
+    if (!geojson || !geojson.coordinates) return empty;
+
+    let outerRings;
+    if (geojson.type === 'Polygon') {
+        outerRings = [geojson.coordinates[0]];
+    } else if (geojson.type === 'MultiPolygon') {
+        outerRings = geojson.coordinates.map(polygon => polygon[0]);
+    } else {
+        return empty;
+    }
+
+    const rings = outerRings
+        .filter(ring => Array.isArray(ring) && ring.length > 0)
+        .map(ring => ringToLatLngs(ring, transform))
+        .filter(ring => ring.length > 0);
+
+    if (rings.length === 0) return empty;
+
+    // Centroid over every vertex of every ring.
+    const allPoints = rings.reduce((acc, ring) => acc.concat(ring), []);
+    return { rings, center: latLngsCentroid(allPoints) };
+}
+
+// ---------------------------------------------------------------------------
+// Map
+// ---------------------------------------------------------------------------
 function initMap() {
-    // Center on Ventura area where demo data is from
+    // Opening view; replaced by the fire's own centroid once a run is loaded.
     map = L.map('map').setView([34.27, -119.29], 11);
 
     // Add base layer - OpenStreetMap
@@ -78,7 +249,36 @@ function addLegend() {
     legend.addTo(map);
 }
 
-// Load available datasets
+// ---------------------------------------------------------------------------
+// Status line (replaces blocking alert() on the simulation happy path)
+// ---------------------------------------------------------------------------
+const STATUS_COLORS = {
+    info: '#ff6b35',
+    success: '#4CAF50',
+    warning: '#ffb300',
+    error: '#f44336'
+};
+
+function setSimStatus(message, kind = 'info') {
+    const el = typeof document !== 'undefined'
+        ? document.getElementById('simStatus')
+        : null;
+    if (!el) return;
+    if (!message) {
+        el.innerHTML = '';
+        return;
+    }
+    el.innerHTML = `<span style="color: ${STATUS_COLORS[kind] || STATUS_COLORS.info};">${message}</span>`;
+}
+
+// ---------------------------------------------------------------------------
+// Datasets (F2)
+// ---------------------------------------------------------------------------
+// Filenames are not a format check. Every fuel-type GeoTIFF is listed; the ✓
+// marks names following the known-compatible convention, and everything else
+// gets a neutral "verify" hint instead of being hidden.
+const ANDERSON13_NAME_HINT = /anderson13/i;
+
 async function loadDatasets() {
     try {
         const response = await fetch(`${API_BASE}/datasets`);
@@ -87,38 +287,46 @@ async function loadDatasets() {
         const fuelSelect = document.getElementById('fuelFile');
         const elevationSelect = document.getElementById('elevationFile');
 
-        data.datasets.forEach(dataset => {
+        let firstKnownFuel = null;
+        let firstFuel = null;
+        let matchedElevation = null;
+        let firstElevation = null;
+
+        (data.datasets || []).forEach(dataset => {
             const option = document.createElement('option');
             option.value = dataset.path;
+            const size = formatBytes(dataset.size);
 
-            // For fuel files, only show Anderson 13 compatible files
             if (dataset.type === 'fuel') {
-                // Check if file is Anderson 13 compatible
-                const isAnderson13 = dataset.filename.includes('anderson13');
+                const knownCompatibleName = ANDERSON13_NAME_HINT.test(dataset.filename);
+                option.textContent = knownCompatibleName
+                    ? `✓ ${dataset.filename} (${size})`
+                    : `${dataset.filename} (${size}) - verify Anderson 13 values 0-13`;
+                fuelSelect.appendChild(option);
 
-                if (isAnderson13) {
-                    option.textContent = `✓ ${dataset.filename} (${formatBytes(dataset.size)})`;
-                    fuelSelect.appendChild(option.cloneNode(true));
-                    // Auto-select first Anderson 13 file
-                    if (fuelSelect.options.length === 2) { // First real option after placeholder
-                        fuelSelect.value = dataset.path;
-                    }
-                }
-                // Don't show non-Anderson13 fuel files in dropdown
+                if (!firstFuel) firstFuel = dataset.path;
+                if (knownCompatibleName && !firstKnownFuel) firstKnownFuel = dataset.path;
             } else {
-                option.textContent = `${dataset.filename} (${formatBytes(dataset.size)})`;
-                elevationSelect.appendChild(option.cloneNode(true));
-                // Auto-select matching Ventura elevation file
-                if (dataset.filename.includes('demo_elevation_ventura')) {
-                    elevationSelect.value = dataset.path;
+                option.textContent = `${dataset.filename} (${size})`;
+                elevationSelect.appendChild(option);
+
+                if (!firstElevation) firstElevation = dataset.path;
+                if (!matchedElevation && dataset.filename.includes('demo_elevation_ventura')) {
+                    matchedElevation = dataset.path;
                 }
             }
         });
 
-        // Show warning if no compatible fuel files found
-        if (fuelSelect.options.length === 1) {
+        // Prefer a known-compatible fuel file, otherwise the first one offered.
+        const fuelChoice = firstKnownFuel || firstFuel;
+        if (fuelChoice) fuelSelect.value = fuelChoice;
+
+        const elevationChoice = matchedElevation || firstElevation;
+        if (elevationChoice) elevationSelect.value = elevationChoice;
+
+        if (!fuelChoice) {
             const option = document.createElement('option');
-            option.textContent = 'No compatible fuel files found';
+            option.textContent = 'No fuel GeoTIFFs found in the data directory';
             option.disabled = true;
             fuelSelect.appendChild(option);
         }
@@ -129,6 +337,7 @@ async function loadDatasets() {
 
 // Format bytes to human readable
 function formatBytes(bytes) {
+    if (!Number.isFinite(bytes)) return 'unknown size';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
@@ -205,37 +414,28 @@ async function loadSimulation(runId) {
 
             // Display first snapshot
             displaySnapshot(0);
+        } else {
+            document.getElementById('timeControl').style.display = 'none';
         }
 
-        // Set ignition point marker and center map on first perimeter
-        if (snapshots.length > 0 && snapshots[0].perimeter) {
-            // Center map on the fire perimeter
-            const firstPerimeter = snapshots[0].perimeter;
-            if (firstPerimeter.coordinates && firstPerimeter.coordinates[0].length > 0) {
-                // Get center of perimeter
-                const coords = firstPerimeter.coordinates[0];
-                const centerX = coords.reduce((sum, c) => sum + c[0], 0) / coords.length;
-                const centerY = coords.reduce((sum, c) => sum + c[1], 0) / coords.length;
-                const [lon, lat] = proj4('EPSG:5070', 'EPSG:4326', [centerX, centerY]);
-                map.setView([lat, lon], 13);
-            }
-        }
+        // Centre the map on the first perimeter and mark the ignition point.
+        // Both used to recompute the same centroid independently.
+        const firstPerimeter = snapshots.length > 0 ? snapshots[0].perimeter : null;
+        const center = projectPerimeter(firstPerimeter).center;
 
-        // Set ignition point marker
-        if (currentSimulation.ignition_grid_x !== null && snapshots.length > 0 && snapshots[0].perimeter) {
+        if (center) {
+            map.setView(center, 13);
+
             if (ignitionMarker) {
                 map.removeLayer(ignitionMarker);
+                ignitionMarker = null;
             }
 
-            // Estimate ignition point from first perimeter center
-            const firstPerimeter = snapshots[0].perimeter;
-            if (firstPerimeter.coordinates && firstPerimeter.coordinates[0].length > 0) {
-                const coords = firstPerimeter.coordinates[0];
-                const centerX = coords.reduce((sum, c) => sum + c[0], 0) / coords.length;
-                const centerY = coords.reduce((sum, c) => sum + c[1], 0) / coords.length;
-                const [lon, lat] = proj4('EPSG:5070', 'EPSG:4326', [centerX, centerY]);
-
-                    ignitionMarker = L.marker([lat, lon], {
+            if (currentSimulation.ignition_grid_x !== null &&
+                currentSimulation.ignition_grid_x !== undefined) {
+                // The first perimeter's centroid is an estimate of the ignition
+                // point; the API does not export its geographic coordinates.
+                ignitionMarker = L.marker(center, {
                     icon: L.icon({
                         iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
                         shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
@@ -251,14 +451,24 @@ async function loadSimulation(runId) {
                     Grid: (${currentSimulation.ignition_grid_x}, ${currentSimulation.ignition_grid_y})<br>
                     Wind: ${currentSimulation.wind_speed} mph @ ${currentSimulation.wind_direction}°
                 `);
-
-                map.setView([lat, lon], 13);
             }
         }
 
     } catch (error) {
         console.error('Error loading simulation:', error);
     }
+}
+
+// Hectares per burned cell, derived from the run's own totals so no cell size
+// is hardcoded here. get_simulation_progress does not return each snapshot's
+// burned_area_hectares column (API-side follow-up), so per-step area is
+// estimated from this ratio.
+function hectaresPerCell() {
+    if (!currentSimulation) return null;
+    const cells = currentSimulation.final_burned_cells;
+    const hectares = currentSimulation.final_burned_area_hectares;
+    if (!cells || !hectares) return null;
+    return hectares / cells;
 }
 
 // Display specific snapshot
@@ -278,39 +488,34 @@ function displaySnapshot(index) {
     perimeterLayer.clearLayers();
 
     // Draw burned perimeter
-    if (snapshot.perimeter) {
-        try {
-            const geojson = snapshot.perimeter; // Already an object, no need to parse
-
-            if (geojson.type === 'Polygon' && geojson.coordinates) {
-                // Transform coordinates from Albers (EPSG:5070) to WGS84 (EPSG:4326)
-                const coords = geojson.coordinates[0].map(coord => {
-                    const [x, y] = coord;
-                    const [lon, lat] = proj4('EPSG:5070', 'EPSG:4326', [x, y]);
-                    return [lat, lon]; // Leaflet uses [lat, lon] format
-                });
-
-                L.polygon(coords, {
-                    color: '#ffaa00',
-                    fillColor: '#cc0000',
-                    fillOpacity: 0.5,
-                    weight: 3
-                }).addTo(perimeterLayer);
-            }
-        } catch (e) {
-            console.error('Error parsing perimeter:', e);
-        }
+    try {
+        const { rings } = projectPerimeter(snapshot.perimeter);
+        rings.forEach(ring => {
+            L.polygon(ring, {
+                color: '#ffaa00',
+                fillColor: '#cc0000',
+                fillOpacity: 0.5,
+                weight: 3
+            }).addTo(perimeterLayer);
+        });
+    } catch (e) {
+        console.error('Error rendering perimeter:', e);
     }
 
     // Update slider
     document.getElementById('timeSlider').value = index;
 
     // Update stats
-    document.getElementById('statBurned').textContent = snapshot.burned_cells || 0;
-    document.getElementById('statArea').textContent =
-        `${(snapshot.burned_area_hectares || 0).toFixed(1)} ha`;
-    document.getElementById('statSimTime').textContent =
-        `${simTime.toFixed(1)} min`;
+    const burnedCells = snapshot.burned_cells || 0;
+    document.getElementById('statBurned').textContent = burnedCells;
+
+    let areaHectares = snapshot.burned_area_hectares;
+    if (areaHectares === null || areaHectares === undefined) {
+        const perCell = hectaresPerCell();
+        areaHectares = perCell !== null ? burnedCells * perCell : 0;
+    }
+    document.getElementById('statArea').textContent = `${areaHectares.toFixed(1)} ha`;
+    document.getElementById('statSimTime').textContent = `${simTime.toFixed(1)} min`;
 }
 
 // Update statistics panel
@@ -319,11 +524,14 @@ function updateStats() {
 
     document.getElementById('statStatus').textContent = currentSimulation.status;
 
-    if (currentSimulation.final_burned_cells) {
+    // Explicit null checks: a legitimate zero-cell result must still render.
+    if (currentSimulation.final_burned_cells !== null &&
+        currentSimulation.final_burned_cells !== undefined) {
         document.getElementById('statBurned').textContent = currentSimulation.final_burned_cells;
     }
 
-    if (currentSimulation.final_burned_area_hectares) {
+    if (currentSimulation.final_burned_area_hectares !== null &&
+        currentSimulation.final_burned_area_hectares !== undefined) {
         document.getElementById('statArea').textContent =
             `${currentSimulation.final_burned_area_hectares.toFixed(1)} ha`;
     }
@@ -340,6 +548,13 @@ function updateStats() {
     }
 }
 
+function setRunButton(enabled, label) {
+    const button = document.getElementById('runSimBtn');
+    if (!button) return;
+    button.disabled = !enabled;
+    button.textContent = label;
+}
+
 // Run new simulation
 async function runSimulation() {
     const fuelFile = document.getElementById('fuelFile').value;
@@ -352,7 +567,7 @@ async function runSimulation() {
     const simSteps = parseInt(document.getElementById('simSteps').value);
 
     if (!fuelFile || !elevationFile) {
-        alert('Please select both fuel and elevation data files');
+        setSimStatus('Select both a fuel and an elevation data file.', 'warning');
         return;
     }
 
@@ -367,9 +582,8 @@ async function runSimulation() {
     };
 
     try {
-        const button = document.getElementById('runSimBtn');
-        button.disabled = true;
-        button.textContent = 'Running...';
+        setRunButton(false, 'Submitting...');
+        setSimStatus('Submitting simulation...', 'info');
 
         const response = await fetch(`${API_BASE}/simulations`, {
             method: 'POST',
@@ -380,48 +594,87 @@ async function runSimulation() {
         const result = await response.json();
 
         if (response.ok) {
-            alert(`Simulation started! Run ID: ${result.run_id}`);
-
-            // Poll for completion
+            setSimStatus(`Run #${result.run_id} queued.`, 'info');
             pollSimulation(result.run_id);
         } else {
-            alert(`Error: ${result.error}`);
-            button.disabled = false;
-            button.textContent = 'Run Simulation';
+            setSimStatus(`Error: ${result.error}`, 'error');
+            setRunButton(true, 'Run Simulation');
         }
     } catch (error) {
         console.error('Error running simulation:', error);
-        alert('Error starting simulation');
-        document.getElementById('runSimBtn').disabled = false;
-        document.getElementById('runSimBtn').textContent = 'Run Simulation';
+        setSimStatus('Could not reach the API to start the simulation.', 'error');
+        setRunButton(true, 'Run Simulation');
     }
 }
 
-// Poll simulation status
+// Poll simulation status until it finishes or the deadline passes.
 async function pollSimulation(runId) {
+    const startedAt = Date.now();
+
     const interval = setInterval(async () => {
+        if (Date.now() - startedAt > POLL_MAX_DURATION_MS) {
+            clearInterval(interval);
+            setRunButton(true, 'Run Simulation');
+            const minutes = Math.round(POLL_MAX_DURATION_MS / 60000);
+            setSimStatus(
+                `Stopped watching run #${runId} after ${minutes} minutes. ` +
+                'It may still be queued or running - pick it from Recent Simulations to check.',
+                'warning'
+            );
+            return;
+        }
+
         try {
             const response = await fetch(`${API_BASE}/simulations/${runId}`);
             const sim = await response.json();
 
+            if (sim.status === 'pending') {
+                setRunButton(false, 'Queued...');
+                setSimStatus(`Run #${runId} is queued behind other simulations.`, 'info');
+                return;
+            }
+
+            if (sim.status === 'running') {
+                setRunButton(false, 'Running...');
+                setSimStatus(`Run #${runId} is running...`, 'info');
+                return;
+            }
+
             if (sim.status === 'completed' || sim.status === 'failed') {
                 clearInterval(interval);
-                document.getElementById('runSimBtn').disabled = false;
-                document.getElementById('runSimBtn').textContent = 'Run Simulation';
-
+                setRunButton(true, 'Run Simulation');
                 loadSimulations();
 
-                if (sim.status === 'completed') {
-                    loadSimulation(runId);
-                    alert('Simulation completed!');
+                if (sim.status === 'failed') {
+                    setSimStatus(
+                        `Run #${runId} failed: ${sim.error_message || 'unknown error'}`,
+                        'error'
+                    );
+                    return;
+                }
+
+                loadSimulation(runId);
+
+                // A completed run that burned nothing is the classic
+                // off-grid-ignition symptom: the simulator bounds-checks the
+                // ignition cell and no-ops rather than failing.
+                if (!sim.final_burned_cells) {
+                    setSimStatus(
+                        `Run #${runId} completed but burned 0 cells - the ignition point ` +
+                        'may be outside the grid or on non-burnable fuel (fuel type 0).',
+                        'warning'
+                    );
                 } else {
-                    alert('Simulation failed: ' + (sim.error_message || 'Unknown error'));
+                    setSimStatus(
+                        `Run #${runId} completed: ${sim.final_burned_cells} cells burned.`,
+                        'success'
+                    );
                 }
             }
         } catch (error) {
             console.error('Error polling simulation:', error);
         }
-    }, 2000);
+    }, POLL_INTERVAL_MS);
 }
 
 // Playback controls
@@ -492,7 +745,7 @@ async function uploadFiles() {
             document.getElementById('uploadElevation').value = '';
             // Reload datasets to show new files
             setTimeout(() => {
-                loadDatasets();
+                refreshDatasets();
                 statusDiv.innerHTML = '';
             }, 2000);
         } else {
@@ -505,6 +758,15 @@ async function uploadFiles() {
         uploadBtn.disabled = false;
         uploadBtn.textContent = 'Upload Files';
     }
+}
+
+// Rebuild both dropdowns from scratch (loadDatasets appends).
+function refreshDatasets() {
+    const fuelSelect = document.getElementById('fuelFile');
+    const elevationSelect = document.getElementById('elevationFile');
+    fuelSelect.innerHTML = '<option value="">Select fuel data...</option>';
+    elevationSelect.innerHTML = '<option value="">Select elevation data...</option>';
+    return loadDatasets();
 }
 
 // Show format information
@@ -542,23 +804,40 @@ If you have LANDFIRE FBFM40 data (values 101-204), use the conversion script:
 See FUEL_DATA_CONVERSION.md for detailed instructions.`);
 }
 
-// Event listeners
-document.addEventListener('DOMContentLoaded', () => {
-    initMap();
-    loadDatasets();
-    loadSimulations();
+// Event listeners (skipped when this file is loaded outside a browser, e.g. by
+// the node unit test for the CRS helpers).
+if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', async () => {
+        initMap();
 
-    // Refresh simulations every 5 seconds
-    setInterval(loadSimulations, 5000);
+        await resolveApiBase();
 
-    document.getElementById('runSimBtn').onclick = runSimulation;
-    document.getElementById('uploadBtn').onclick = uploadFiles;
-    document.getElementById('showFormatInfo').onclick = showFormatInfo;
-    document.getElementById('timeSlider').oninput = (e) => {
-        pause();
-        displaySnapshot(parseInt(e.target.value));
+        loadDatasets();
+        loadSimulations();
+
+        // Refresh simulations every 5 seconds
+        setInterval(loadSimulations, 5000);
+
+        document.getElementById('runSimBtn').onclick = runSimulation;
+        document.getElementById('uploadBtn').onclick = uploadFiles;
+        document.getElementById('showFormatInfo').onclick = showFormatInfo;
+        document.getElementById('timeSlider').oninput = (e) => {
+            pause();
+            displaySnapshot(parseInt(e.target.value));
+        };
+        document.getElementById('playBtn').onclick = play;
+        document.getElementById('pauseBtn').onclick = pause;
+        document.getElementById('resetBtn').onclick = reset;
+    });
+}
+
+// Exported for the node unit test (frontend/crs_test.js). Harmless in the
+// browser, where `module` is undefined.
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+        looksLikeWgs84,
+        ringToLatLngs,
+        latLngsCentroid,
+        projectPerimeter
     };
-    document.getElementById('playBtn').onclick = play;
-    document.getElementById('pauseBtn').onclick = pause;
-    document.getElementById('resetBtn').onclick = reset;
-});
+}

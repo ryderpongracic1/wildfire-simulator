@@ -237,6 +237,11 @@
             font-weight: bold;
         }
 
+        .status-pending {
+            background: #9e9e9e;
+            color: white;
+        }
+
         .status-running {
             background: #2196F3;
             color: white;
@@ -298,45 +303,49 @@
             <div class="control-panel">
                 <h3>New Simulation</h3>
                 <div class="form-group">
-                    <label>Fuel Data File <span style="color: #888; font-size: 11px;">(Anderson 13 format only)</span></label>
+                    <label for="fuelFile">Fuel Data File <span style="color: #888; font-size: 11px;">(Anderson 13 values 0-13)</span></label>
                     <select id="fuelFile">
                         <option value="">Select fuel data...</option>
                     </select>
                     <div style="font-size: 11px; color: #888; margin-top: 5px;">
-                        ✓ = Compatible fuel model format
+                        ✓ = filename follows the known-compatible Anderson 13 convention
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>Elevation Data File</label>
+                    <label for="elevationFile">Elevation Data File</label>
                     <select id="elevationFile">
                         <option value="">Select elevation data...</option>
                     </select>
                 </div>
+                <!-- Defaults match the shipped sample data: a 300x300 grid whose
+                     generator suggests ignition (150, 150), 10-15 mph wind from
+                     the west, 6-10% fuel moisture. -->
                 <div class="form-group">
-                    <label>Ignition Point X (Grid)</label>
-                    <input type="number" id="ignitionX" value="400" min="0">
+                    <label for="ignitionX">Ignition Point X (Grid)</label>
+                    <input type="number" id="ignitionX" value="150" min="0">
                 </div>
                 <div class="form-group">
-                    <label>Ignition Point Y (Grid)</label>
-                    <input type="number" id="ignitionY" value="400" min="0">
+                    <label for="ignitionY">Ignition Point Y (Grid)</label>
+                    <input type="number" id="ignitionY" value="150" min="0">
                 </div>
                 <div class="form-group">
-                    <label>Wind Speed (mph)</label>
-                    <input type="number" id="windSpeed" value="20" min="0" max="100" step="1">
+                    <label for="windSpeed">Wind Speed (mph)</label>
+                    <input type="number" id="windSpeed" value="12" min="0" max="100" step="1">
                 </div>
                 <div class="form-group">
-                    <label>Wind Direction (degrees from N)</label>
-                    <input type="number" id="windDirection" value="45" min="0" max="360" step="1">
+                    <label for="windDirection">Wind Direction (degrees from N)</label>
+                    <input type="number" id="windDirection" value="270" min="0" max="360" step="1">
                 </div>
                 <div class="form-group">
-                    <label>Fuel Moisture (%)</label>
-                    <input type="number" id="fuelMoisture" value="5" min="0" max="100" step="1">
+                    <label for="fuelMoisture">Fuel Moisture (%)</label>
+                    <input type="number" id="fuelMoisture" value="8" min="0" max="100" step="1">
                 </div>
                 <div class="form-group">
-                    <label>Simulation Steps</label>
-                    <input type="number" id="simSteps" value="120" min="1" max="1000">
+                    <label for="simSteps">Simulation Steps</label>
+                    <input type="number" id="simSteps" value="60" min="1" max="1000">
                 </div>
                 <button class="btn btn-primary" id="runSimBtn">Run Simulation</button>
+                <div id="simStatus" role="status" aria-live="polite" style="margin-top: 10px; font-size: 12px;"></div>
             </div>
 
             <div class="control-panel">
@@ -346,15 +355,15 @@
                     <a href="#" id="showFormatInfo" style="color: #ff6b35;">Learn more</a>
                 </div>
                 <div class="form-group">
-                    <label>Fuel Data (.tif)</label>
+                    <label for="uploadFuel">Fuel Data (.tif)</label>
                     <input type="file" id="uploadFuel" accept=".tif,.tiff" style="padding: 5px;">
                 </div>
                 <div class="form-group">
-                    <label>Elevation Data (.tif)</label>
+                    <label for="uploadElevation">Elevation Data (.tif)</label>
                     <input type="file" id="uploadElevation" accept=".tif,.tiff" style="padding: 5px;">
                 </div>
                 <button class="btn btn-primary" id="uploadBtn" style="background: #555;">Upload Files</button>
-                <div id="uploadStatus" style="margin-top: 10px; font-size: 12px;"></div>
+                <div id="uploadStatus" role="status" aria-live="polite" style="margin-top: 10px; font-size: 12px;"></div>
             </div>
 
             <div class="control-panel">
