@@ -15,6 +15,56 @@ find_package(GDAL REQUIRED)
 # Try to find OpenMP (optional - will work without it)
 find_package(OpenMP)
 
+# macOS: AppleClang ships no OpenMP runtime, and Homebrew's libomp sits outside
+# the default include/library search paths, so the plain search above reports
+# "not found" even with libomp installed -- the Mac build silently went serial.
+# Point FindOpenMP at the Homebrew prefix and ask again.
+#
+# Guarded on APPLE, so nothing here runs on Linux: the Docker build finds
+# OpenMP natively through GCC and is untouched.
+if(APPLE AND NOT OpenMP_CXX_FOUND)
+    set(OMP_PREFIX_CANDIDATES "")
+
+    # Ask brew first: it knows the real prefix under either Homebrew layout,
+    # and covers a non-default HOMEBREW_PREFIX.
+    find_program(BREW_EXECUTABLE brew)
+    if(BREW_EXECUTABLE)
+        execute_process(
+            COMMAND "${BREW_EXECUTABLE}" --prefix libomp
+            OUTPUT_VARIABLE BREW_LIBOMP_PREFIX
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(BREW_LIBOMP_PREFIX)
+            list(APPEND OMP_PREFIX_CANDIDATES "${BREW_LIBOMP_PREFIX}")
+        endif()
+    endif()
+
+    # Conventional locations, for when brew is not on PATH (Apple Silicon, Intel).
+    list(APPEND OMP_PREFIX_CANDIDATES /opt/homebrew/opt/libomp /usr/local/opt/libomp)
+
+    foreach(OMP_PREFIX IN LISTS OMP_PREFIX_CANDIDATES)
+        if(EXISTS "${OMP_PREFIX}/include/omp.h" AND
+           EXISTS "${OMP_PREFIX}/lib/libomp.dylib")
+            message(STATUS "Retrying OpenMP with Homebrew libomp at ${OMP_PREFIX}")
+            # FindOpenMP honors these as hints and skips its own flag search.
+            set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I${OMP_PREFIX}/include")
+            set(OpenMP_CXX_LIB_NAMES "omp")
+            set(OpenMP_omp_LIBRARY "${OMP_PREFIX}/lib/libomp.dylib")
+            find_package(OpenMP)
+            if(OpenMP_CXX_FOUND)
+                break()
+            endif()
+        endif()
+    endforeach()
+
+    if(NOT OpenMP_CXX_FOUND)
+        message(STATUS
+            "No usable Homebrew libomp found - install it with 'brew install libomp' "
+            "for parallel execution")
+    endif()
+endif()
+
 # JSON library (header-only)
 include(FetchContent)
 FetchContent_Declare(

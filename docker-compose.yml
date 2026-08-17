@@ -3,7 +3,18 @@ version: '3.8'
 services:
   # PostgreSQL database with PostGIS extension
   database:
-    image: postgis/postgis:15-3.3
+    # Multi-arch (linux/amd64 + linux/arm64): runs natively on Apple Silicon
+    # instead of under qemu emulation. postgis/postgis publishes amd64 only --
+    # every tag, by design ("Supported architecture: amd64" in its README) --
+    # which is why the previous postgis/postgis:15-3.3 drew a platform-mismatch
+    # warning on an M-series Mac. imresamu/postgis is the multi-arch build of
+    # the same upstream Dockerfiles, maintained by a postgis/docker-postgis
+    # maintainer. Postgres major stays 15, so an existing postgres_data volume
+    # is still readable; PostGIS moves 3.3 -> 3.5, both 3.x as schema.sql needs.
+    image: imresamu/postgis:15-3.5
+    # Official image, amd64 only. Swap back if you want the postgis-org build
+    # and don't mind emulation on arm64:
+    # image: postgis/postgis:15-3.3
     container_name: wildfire_db
     environment:
       POSTGRES_DB: wildfire_db
