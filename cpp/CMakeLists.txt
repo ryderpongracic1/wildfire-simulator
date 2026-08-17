@@ -56,6 +56,16 @@ else()
     target_compile_definitions(wildfire_simulator PRIVATE NO_OPENMP)
 endif()
 
+# Tests (model core only -- no GDAL dependency)
+enable_testing()
+add_executable(model_test tests/model_test.cpp src/FireSpreadModel.cpp)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(model_test OpenMP::OpenMP_CXX)
+else()
+    target_compile_definitions(model_test PRIVATE NO_OPENMP)
+endif()
+add_test(NAME model_test COMMAND model_test)
+
 # Install target
 install(TARGETS wildfire_simulator DESTINATION bin)
 

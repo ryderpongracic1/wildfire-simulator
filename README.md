@@ -8,7 +8,7 @@ A high-performance wildfire spread simulation system that models fire behavior u
 
 ## 🌟 Features
 
-- **⚡ High-Performance Computing**: C++ simulation engine with OpenMP parallelization (8-12x speedup)
+- **⚡ High-Performance Computing**: C++ simulation engine with a copy-free, OpenMP-parallel propagation step
 - **🌍 Real Geospatial Data**: Processes LANDFIRE fuel models and USGS elevation data (GeoTIFF format)
 - **🔬 Physics-Based Modeling**: Implements Rothermel fire spread equations with cellular automaton approach
 - **🎮 Interactive Visualization**: Web-based interface with real-time fire spread animation
@@ -240,21 +240,22 @@ print(f"Status: {status['status']}")
 
 ## ⚡ Performance
 
-The simulator achieves real-time performance through parallel computing:
+Measured on a 4-core Linux x86-64 box (GCC 11, `-O3 -march=native`), grid 500×500
+cells, 120 time steps (2 hours simulated), grass fuel, 15 mph wind:
 
-### Benchmark Results
+| Configuration | Wall Time | Notes |
+|---------------|-----------|-------|
+| 1 thread      | 0.33s     | ~21,800× faster than real time |
+| 2–4 threads   | 0.20s     | scaling is modest — the step is memory-bound |
 
-Grid size: 500×500 cells (250,000 cells)
-Simulation: 120 time steps (2 hours simulated time)
+The propagation step does no full-grid copies: a parallel read-only sweep
+collects ignitions into per-thread lists, then front-limited waves expand only
+around newly ignited cells. Reproduce with:
 
-| Threads | Wall Time | Speedup | Real-time Factor |
-|---------|-----------|---------|------------------|
-| 1       | 24.5s     | 1.0x    | 288x faster      |
-| 4       | 7.1s      | 3.45x   | 1,014x faster    |
-| 8       | 3.8s      | 6.45x   | 1,800x faster    |
-| 16      | 2.1s      | 11.67x  | 3,429x faster    |
-
-**Example**: Simulating a 2-hour wildfire takes only ~4 seconds with 8 CPU cores.
+```bash
+g++ -O3 -march=native -fopenmp -Icpp/include \
+    cpp/tests/model_test.cpp cpp/src/FireSpreadModel.cpp -o model_test && ./model_test
+```
 
 ## 📡 API Endpoints
 
@@ -274,9 +275,15 @@ See [API Documentation](docs/API.md) for detailed request/response schemas.
 
 ## 🔬 Fire Physics Model
 
-The simulator implements the **Rothermel fire spread model** with:
+The simulator implements the **Rothermel fire spread model** on a cellular
+automaton using **deterministic time-of-arrival propagation**: a cell ignites
+when the fire front from any ignited neighbor reaches it, where the arrival
+time is the neighbor's ignition time plus distance divided by the directional
+Rothermel rate of spread. Sub-cell-per-step rates take multiple steps to cross
+a cell; faster rates cross several cells in one step. Identical inputs always
+produce identical fires.
 
-### Factors Affecting Fire Spread
+Factors shaping the spread rate:
 
 1. **Fuel Type**: 13 standard fuel models (Anderson classification)
    - Grass (1-3): Fast spread, low intensity
@@ -323,6 +330,20 @@ wildfire-simulator/
 ├── output/                # Simulation results
 ├── scripts/               # Utility scripts
 └── docs/                  # Documentation
+```
+
+## 🧪 Tests
+
+The model core has a physics regression suite (`cpp/tests/model_test.cpp`, no
+GDAL or database dependency). It pins the properties that matter: wind
+elongates the fire downwind, uphill spread beats downhill, moisture damps and
+extinction moisture stops spread, fuel types differ, non-burnable cells block
+fire, results are deterministic, and halving the time step barely changes
+total spread.
+
+```bash
+cd cpp && mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release .. && make model_test && ctest
 ```
 
 ## 🐛 Troubleshooting

@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <algorithm>
 
 /**
  * LANDFIRE 13 Anderson Fuel Model Classifications
@@ -106,15 +107,11 @@ private:
     double calculateSlopeFactor(double slopeAngle) const;
 
     /**
-     * Calculate effective wind speed considering slope and wind interaction
+     * Calculate directional rate of spread (cells per minute) from a burning
+     * cell into a neighboring cell, accounting for wind and slope alignment
+     * with the spread direction.
      */
-    double calculateEffectiveWind(double windSpeed, double windDir,
-                                  double slopeAngle, double slopeAspect) const;
-
-    /**
-     * Calculate probability of ignition for neighboring cell
-     */
-    double calculateIgnitionProbability(int fromX, int fromY, int toX, int toY) const;
+    double calculateSpreadRate(int fromX, int fromY, int toX, int toY) const;
 
     /**
      * Get cell at position with boundary checking

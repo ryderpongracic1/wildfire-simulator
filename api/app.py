@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 import subprocess
 import json
 import os
@@ -160,50 +160,56 @@ def process_simulation_results(run_id, config):
         with open(os.path.join(OUTPUT_DIR, snapshot_file), 'r') as f:
             snapshot = json.load(f)
 
-        # Create polygon from perimeter points
+        # Build the perimeter polygon as the convex hull of the perimeter
+        # points. The perimeter cells arrive in row-scan order, so joining
+        # them directly produced a self-intersecting (invalid) ring; every
+        # ST_Area/ST_Intersects downstream operated on garbage geometry.
         if snapshot['perimeter']['features']:
             points = []
             for feature in snapshot['perimeter']['features']:
                 coords = feature['geometry']['coordinates']
                 points.append(f"{coords[0]} {coords[1]}")
 
-            if points:
-                # Close the polygon
-                points.append(points[0])
-                polygon_wkt = f"POLYGON(({', '.join(points)}))"
+            if len(points) >= 3:
+                multipoint_wkt = f"MULTIPOINT({', '.join(points)})"
 
                 cur.execute("""
                     INSERT INTO simulation_snapshots
                     (run_id, simulation_time, step_number, burned_perimeter,
                      burned_cells, burning_cells, burned_area_hectares)
-                    VALUES (%s, %s, %s, ST_GeomFromText(%s, 4326), %s, %s, %s)
+                    VALUES (%s, %s, %s,
+                            ST_CollectionExtract(
+                                ST_ConvexHull(ST_GeomFromText(%s, 4326)), 3),
+                            %s, %s, %s)
                     ON CONFLICT (run_id, step_number) DO NOTHING
                 """, (
                     run_id,
                     snapshot['simulation_time'],
                     int(snapshot_file.split('_')[-1].replace('.json', '')),
-                    polygon_wkt,
+                    multipoint_wkt,
                     snapshot['burned_cells'],
                     snapshot['burning_cells'],
                     snapshot['burned_cells'] * config['cell_size']**2 / 10000.0
                 ))
 
-    # Store individual burned cells
+    # Store individual burned cells in one batched statement.
+    # The previous loop issued one INSERT round-trip per burned cell, which
+    # dominated result-processing time for large fires.
     if 'grid_state' in final_state:
-        for cell in final_state['grid_state']:
-            cur.execute("""
+        rows = [
+            (run_id, cell['x'], cell['y'], cell['geoX'], cell['geoY'],
+             cell['ignition_time'])
+            for cell in final_state['grid_state']
+        ]
+        if rows:
+            execute_values(cur, """
                 INSERT INTO burned_cells
                 (run_id, grid_x, grid_y, location, ignition_time)
-                VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)
+                VALUES %s
                 ON CONFLICT (run_id, grid_x, grid_y) DO NOTHING
-            """, (
-                run_id,
-                cell['x'],
-                cell['y'],
-                cell['geoX'],
-                cell['geoY'],
-                cell['ignition_time']
-            ))
+            """, rows,
+                template="(%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), %s)",
+                page_size=1000)
 
     conn.commit()
     cur.close()
@@ -411,7 +417,7 @@ def get_burned_cells(run_id):
         conn = get_db_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        if minx and miny and maxx and maxy:
+        if all(v is not None for v in (minx, miny, maxx, maxy)):
             cur.execute("""
                 SELECT * FROM get_burned_cells_in_area(%s, %s, %s, %s, %s)
             """, (run_id, minx, miny, maxx, maxy))
@@ -516,4 +522,5 @@ def upload_files():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    debug = os.environ.get('FLASK_DEBUG', '0') == '1'
+    app.run(host='0.0.0.0', port=5000, debug=debug)

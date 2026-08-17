@@ -1,6 +1,7 @@
 #include "FireSpreadModel.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <iostream>
 #ifndef NO_OPENMP
 #include <omp.h>
@@ -111,7 +112,8 @@ void FireSpreadModel::calculateSlope(int x, int y) {
     double slopeRise = sqrt(dz_dx * dz_dx + dz_dy * dz_dy);
     getCell(x, y).slopeAngle = atan(slopeRise) * 180.0 / M_PI;
 
-    // Calculate aspect (direction of steepest descent)
+    // Calculate aspect: direction of steepest ASCENT (uphill), as a compass bearing.
+    // Fire spreading in this direction gets the full positive slope effect.
     if (dz_dx != 0.0 || dz_dy != 0.0) {
         getCell(x, y).slopeAspect = atan2(dz_dy, dz_dx) * 180.0 / M_PI;
         // Convert to compass bearing (0 = North)
@@ -146,8 +148,14 @@ void FireSpreadModel::igniteCell(int x, int y) {
 }
 
 double FireSpreadModel::calculateWindFactor(const FuelProperties& fuel, double windSpeed) const {
-    // Simplified wind factor based on Rothermel model
-    // Wind coefficient depends on surface-area-to-volume ratio
+    // Wind factor phi_w from the Rothermel model:
+    //   phi_w = C * U^B * (beta/beta_op)^-E
+    // where beta is the packing ratio (fuel bulk density / particle density)
+    // and beta_op is the optimum packing ratio.
+    if (windSpeed <= 0.0) {
+        return 0.0;
+    }
+
     double B = 0.02526 * pow(fuel.sav, 0.54);
     double C = 7.47 * exp(-0.133 * pow(fuel.sav, 0.55));
     double E = 0.715 * exp(-3.59e-4 * fuel.sav);
@@ -155,8 +163,14 @@ double FireSpreadModel::calculateWindFactor(const FuelProperties& fuel, double w
     // Wind speed in ft/min
     double windSpeedFpm = windSpeed * 88.0; // mph to ft/min
 
+    // Packing ratio: fuel load (tons/acre -> lb/ft^2) over bed volume, with
+    // an ovendry particle density of 32 lb/ft^3 (Rothermel 1972).
+    double fuelLoadLbFt2 = fuel.fuelLoad * 2000.0 / 43560.0;
+    double beta = fuelLoadLbFt2 / (std::max(fuel.fuelDepth, 0.01) * 32.0);
+    double betaOp = 3.348 * pow(fuel.sav, -0.8189);
+
     // Phi_w (wind factor)
-    double phiW = C * pow(windSpeedFpm, B) * pow(fuel.sav / 0.0001, -E);
+    double phiW = C * pow(windSpeedFpm, B) * pow(beta / betaOp, -E);
 
     return phiW;
 }
@@ -164,7 +178,11 @@ double FireSpreadModel::calculateWindFactor(const FuelProperties& fuel, double w
 double FireSpreadModel::calculateSlopeFactor(double slopeAngle) const {
     // Slope factor based on Rothermel model
     // Phi_s = 5.275 * beta^(-0.3) * (tan(slope))^2
-    // Simplified version for cellular automaton
+    // Downslope spread gets no slope boost: clamp negative effective slope to zero
+    // (tan^2 would otherwise make downhill as fast as uphill).
+    if (slopeAngle <= 0.0) {
+        return 0.0;
+    }
     double slopeRadians = slopeAngle * M_PI / 180.0;
     double tanSlope = tan(slopeRadians);
 
@@ -172,30 +190,6 @@ double FireSpreadModel::calculateSlopeFactor(double slopeAngle) const {
     double phiS = 5.275 * pow(0.4, -0.3) * tanSlope * tanSlope;
 
     return phiS;
-}
-
-double FireSpreadModel::calculateEffectiveWind(double windSpeed, double windDir,
-                                               double slopeAngle, double slopeAspect) const {
-    // Calculate effective wind by combining actual wind and slope-induced wind
-    // This is a simplified model
-
-    // Slope-induced wind (fire creates upslope draft)
-    double slopeWind = slopeAngle * 0.5; // Empirical relationship
-
-    // Combine wind vectors
-    double windRad = windDir * M_PI / 180.0;
-    double slopeRad = slopeAspect * M_PI / 180.0;
-
-    double windX = windSpeed * sin(windRad);
-    double windY = windSpeed * cos(windRad);
-
-    double slopeWindX = slopeWind * sin(slopeRad);
-    double slopeWindY = slopeWind * cos(slopeRad);
-
-    double effectiveWindX = windX + slopeWindX;
-    double effectiveWindY = windY + slopeWindY;
-
-    return sqrt(effectiveWindX * effectiveWindX + effectiveWindY * effectiveWindY);
 }
 
 double FireSpreadModel::calculateRateOfSpread(const FuelProperties& fuel, double slope,
@@ -233,12 +227,11 @@ double FireSpreadModel::calculateRateOfSpread(const FuelProperties& fuel, double
     return ros;
 }
 
-double FireSpreadModel::calculateIgnitionProbability(int fromX, int fromY,
-                                                     int toX, int toY) const {
-    const Cell& fromCell = getCell(fromX, fromY);
+double FireSpreadModel::calculateSpreadRate(int fromX, int fromY,
+                                            int toX, int toY) const {
     const Cell& toCell = getCell(toX, toY);
 
-    // Can't ignite non-burnable fuel
+    // Can't spread into non-burnable fuel or already-ignited cells
     if (toCell.fuelType == FUEL_NONE || toCell.burnStatus != 0) {
         return 0.0;
     }
@@ -260,106 +253,153 @@ double FireSpreadModel::calculateIgnitionProbability(int fromX, int fromY,
     double effectiveWind = windSpeed * cos(directionDiff * M_PI / 180.0);
     effectiveWind = std::max(0.0, effectiveWind);
 
-    // Consider slope effect
+    // Consider slope effect (negative = downslope; clamped in calculateSlopeFactor)
     double slopeDiff = fabs(spreadDirection - toCell.slopeAspect);
     if (slopeDiff > 180.0) slopeDiff = 360.0 - slopeDiff;
 
     double effectiveSlope = toCell.slopeAngle * cos(slopeDiff * M_PI / 180.0);
 
-    // Calculate rate of spread
+    // Calculate rate of spread (ft/min)
     double ros = calculateRateOfSpread(fuel, effectiveSlope, effectiveWind);
 
-    // Convert ROS (ft/min) to cells/timestep
+    // Convert ROS to cells per minute
     double cellSizeFt = cellSize * 3.28084; // meters to feet
-    double spreadRate = (ros * timeStep) / cellSizeFt;
-
-    // Diagonal cells are sqrt(2) farther
-    if (dx != 0 && dy != 0) {
-        spreadRate /= 1.414;
-    }
-
-    // Probability is based on spread rate (0 to 1)
-    double probability = std::min(1.0, spreadRate);
-
-    return probability;
+    return ros / cellSizeFt;
 }
 
 const Cell& FireSpreadModel::getCell(int x, int y) const {
-    static Cell dummyCell;
-    if (x < 0 || x >= width || y < 0 || y >= height) {
-        return dummyCell;
-    }
+    // Clamp to grid bounds. This avoids the previous shared mutable static
+    // "dummy cell", which was both a data race under OpenMP (all out-of-bounds
+    // writes aliased one object across threads) and silently swallowed writes.
+    x = std::clamp(x, 0, width - 1);
+    y = std::clamp(y, 0, height - 1);
     return grid[y * width + x];
 }
 
 Cell& FireSpreadModel::getCell(int x, int y) {
-    static Cell dummyCell;
-    if (x < 0 || x >= width || y < 0 || y >= height) {
-        return dummyCell;
-    }
+    x = std::clamp(x, 0, width - 1);
+    y = std::clamp(y, 0, height - 1);
     return grid[y * width + x];
 }
 
 void FireSpreadModel::step() {
-    // Copy current grid to next grid
-    nextGrid = grid;
+    // Time-of-arrival propagation:
+    // A cell ignites when the fire front from any ignited neighbor reaches it.
+    // Arrival time = neighbor ignition time + distance / directional rate of
+    // spread. Sub-cell-per-step rates take multiple steps to cross a cell;
+    // faster rates ignite within a step via front-limited inner iterations.
+    // Wind, slope, fuel type, and moisture all shape the fire perimeter, and
+    // the result is fully deterministic.
+    //
+    // The previous implementation thresholded a per-step "probability" at 0.3,
+    // which collapsed every configuration to exactly 1 cell/step in all eight
+    // directions (a perfect square) regardless of physics inputs. It also did
+    // two full grid copies per step; this version does none.
+    const double stepEnd = simulationTime + timeStep;
 
-    // OpenMP parallel processing of grid cells
-    // Each thread processes a subset of cells independently
+    // Burning -> burned display transition for cells ignited before this step.
+    // Burned cells remain valid spread sources because arrival times are
+    // computed from their recorded ignition times.
 #ifndef NO_OPENMP
-    #pragma omp parallel for collapse(2) schedule(dynamic)
+    #pragma omp parallel for schedule(static)
 #endif
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            int idx = y * width + x;
-            Cell& currentCell = nextGrid[idx];
-
-            // Cells that are burning transition to burned after one timestep
-            if (grid[idx].burnStatus == 1) {
-                currentCell.burnStatus = 2;
-            }
-
-            // Check if this cell should ignite
-            if (grid[idx].burnStatus == 0 && grid[idx].fuelType != FUEL_NONE) {
-                // Check all 8 neighbors
-                bool ignited = false;
-                double maxProbability = 0.0;
-
-                for (int dy = -1; dy <= 1 && !ignited; ++dy) {
-                    for (int dx = -1; dx <= 1 && !ignited; ++dx) {
-                        if (dx == 0 && dy == 0) continue;
-
-                        int nx = x + dx;
-                        int ny = y + dy;
-
-                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                            int nidx = ny * width + nx;
-
-                            // If neighbor is burning
-                            if (grid[nidx].burnStatus == 1) {
-                                double prob = calculateIgnitionProbability(nx, ny, x, y);
-                                maxProbability = std::max(maxProbability, prob);
-
-                                // Stochastic ignition based on probability
-                                if (prob > 0.3) { // Threshold for ignition (lowered to allow better spread)
-                                    ignited = true;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (ignited) {
-                    currentCell.burnStatus = 1;
-                    currentCell.ignitionTime = simulationTime;
-                }
-            }
+    for (int i = 0; i < width * height; ++i) {
+        if (grid[i].burnStatus == 1) {
+            grid[i].burnStatus = 2;
         }
     }
 
-    // Swap grids
-    grid = nextGrid;
-    simulationTime += timeStep;
+    // Returns the earliest fire arrival time at (x, y) from ignited neighbors,
+    // or +inf. Read-only on grid, safe to call concurrently.
+    auto arrivalAt = [this](int x, int y) {
+        double earliest = std::numeric_limits<double>::infinity();
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) continue;
+                const int nx = x + dx;
+                const int ny = y + dy;
+                if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+
+                const Cell& neighbor = grid[ny * width + nx];
+                if (neighbor.burnStatus == 0) continue;
+
+                const double rate = calculateSpreadRate(nx, ny, x, y); // cells/min
+                if (rate <= 0.0) continue;
+
+                const double dist = (dx != 0 && dy != 0) ? 1.4142135623730951 : 1.0;
+                earliest = std::min(earliest, neighbor.ignitionTime + dist / rate);
+            }
+        }
+        return earliest;
+    };
+
+    // Pass 1: parallel full-grid sweep. Reads grid only; newly ignited cells
+    // are collected per-thread and applied afterwards, so there are no writes
+    // to shared state during the sweep (no copy, no race).
+    std::vector<std::pair<int, double>> ignitions; // (index, arrival time)
+#ifndef NO_OPENMP
+    #pragma omp parallel
+    {
+        std::vector<std::pair<int, double>> local;
+        #pragma omp for schedule(static) nowait
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                const int idx = y * width + x;
+                if (grid[idx].burnStatus != 0 || grid[idx].fuelType == FUEL_NONE) continue;
+                const double arrival = arrivalAt(x, y);
+                if (arrival <= stepEnd) local.push_back({idx, arrival});
+            }
+        }
+        #pragma omp critical
+        ignitions.insert(ignitions.end(), local.begin(), local.end());
+    }
+#else
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const int idx = y * width + x;
+            if (grid[idx].burnStatus != 0 || grid[idx].fuelType == FUEL_NONE) continue;
+            const double arrival = arrivalAt(x, y);
+            if (arrival <= stepEnd) ignitions.push_back({idx, arrival});
+        }
+    }
+#endif
+
+    // Apply pass-1 ignitions, then expand only around the new front until the
+    // step's time budget is exhausted. Inner waves touch O(front) cells, not
+    // O(grid), and run serially (front is small relative to the grid).
+    for (const auto& [idx, arrival] : ignitions) {
+        grid[idx].burnStatus = 1;
+        grid[idx].ignitionTime = std::max(arrival, simulationTime);
+    }
+    std::vector<std::pair<int, double>> frontier = std::move(ignitions);
+    while (!frontier.empty()) {
+        std::vector<std::pair<int, double>> next;
+        for (const auto& [idx, arrival] : frontier) {
+            (void)arrival;
+            const int cx = idx % width;
+            const int cy = idx / width;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    if (dx == 0 && dy == 0) continue;
+                    const int nx = cx + dx;
+                    const int ny = cy + dy;
+                    if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+                    const int nidx = ny * width + nx;
+                    if (grid[nidx].burnStatus != 0 || grid[nidx].fuelType == FUEL_NONE) continue;
+
+                    const double a = arrivalAt(nx, ny);
+                    if (a <= stepEnd) {
+                        grid[nidx].burnStatus = 1;
+                        grid[nidx].ignitionTime = std::max(a, simulationTime);
+                        next.push_back({nidx, a});
+                    }
+                }
+            }
+        }
+        frontier = std::move(next);
+    }
+
+    simulationTime = stepEnd;
 }
 
 std::vector<std::pair<double, double>> FireSpreadModel::getBurnedPerimeter() const {
@@ -368,7 +408,7 @@ std::vector<std::pair<double, double>> FireSpreadModel::getBurnedPerimeter() con
 
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
-            const Cell& cell = getCell(x, y);
+            const Cell& cell = grid[y * width + x];
 
             if (cell.burnStatus >= 1) { // Burning or burned
                 // Check if on perimeter (has unburned neighbor)
@@ -381,7 +421,7 @@ std::vector<std::pair<double, double>> FireSpreadModel::getBurnedPerimeter() con
                         int ny = y + dy;
 
                         if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                            if (getCell(nx, ny).burnStatus == 0) {
+                            if (grid[ny * width + nx].burnStatus == 0) {
                                 onPerimeter = true;
                             }
                         } else {

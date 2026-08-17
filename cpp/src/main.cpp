@@ -3,6 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include <chrono>
+#include <filesystem>
 #ifndef NO_OPENMP
 #include <omp.h>
 #endif
@@ -97,8 +98,16 @@ void exportStateToJSON(const FireSpreadModel& model, const GeoBounds& bounds,
 
     // Write to file
     std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error: could not open output file " << filename << std::endl;
+        return;
+    }
     file << output.dump(2);
     file.close();
+    if (!file) {
+        std::cerr << "Error: write to " << filename << " failed" << std::endl;
+        return;
+    }
 
     std::cout << "Exported state to " << filename << std::endl;
 }
@@ -126,6 +135,16 @@ void runSimulation(const json& config) {
     double timeStep = config["time_step"];
     int runId = config.value("run_id", 1);
     std::string outputDir = config.value("output_dir", "output");
+
+    // Previously a missing output directory made every snapshot write fail
+    // silently while still printing "Exported state to ...".
+    std::error_code ec;
+    std::filesystem::create_directories(outputDir, ec);
+    if (ec) {
+        std::cerr << "Error: could not create output directory " << outputDir
+                  << ": " << ec.message() << std::endl;
+        return;
+    }
 
     std::cout << "\n--- Loading Geospatial Data ---" << std::endl;
     Timer loadTimer;
