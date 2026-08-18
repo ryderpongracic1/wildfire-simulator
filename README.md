@@ -373,6 +373,21 @@ sudo apt-get install libomp-dev
 # macOS
 brew install libomp
 ```
+On macOS the CMake configure step probes `brew --prefix libomp` (and the
+conventional `/opt/homebrew/opt/libomp`, `/usr/local/opt/libomp`) and retries
+detection, since AppleClang finds neither on its own. Look for
+`Retrying OpenMP with Homebrew libomp at ...` followed by
+`✓ OpenMP enabled`. If you still get `⚠ OpenMP not found`, `brew install libomp`
+and re-run `cmake`.
+
+**Postgres container runs emulated on Apple Silicon:**
+Compose uses `imresamu/postgis:15-3.5`, which publishes both `linux/amd64` and
+`linux/arm64` — the official `postgis/postgis` images are amd64-only at every
+tag, so they run under qemu on an M-series Mac. To go back to the official
+image, uncomment the `postgis/postgis:15-3.3` line in `docker-compose.yml`; it
+works, just slower. Switching images means a Postgres data directory built by
+one and read by the other, so `docker compose down -v` if the database refuses
+to start.
 
 ## 📚 Scientific References
 

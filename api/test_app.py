@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from validation import (  # noqa: E402
     ValidationError,
     resolve_dataset_path,
+    scan_datasets,
     validate_simulation_request,
 )
 
@@ -299,6 +300,102 @@ class TestValidateSimulationRequest(DataDirTestCase):
                 self.valid_request(
                     elevation_data_file='../outside/secret.tif'),
                 self.data_dir)
+
+
+class TestScanDatasets(DataDirTestCase):
+    """GET /api/datasets used a flat os.listdir, so data/sample/*.tif was
+    invisible and the endpoint answered {"datasets": []} on a fresh checkout."""
+
+    def names(self, data_dir=None):
+        return [d['filename'] for d in
+                scan_datasets(self.data_dir if data_dir is None else data_dir)]
+
+    def test_finds_both_top_level_and_nested_datasets(self):
+        self.assertEqual(
+            self.names(),
+            ['elevation.tif', 'fuel.tif', os.path.join('nested', 'fuel.tif')])
+
+    def test_every_advertised_path_is_accepted_by_resolve_dataset_path(self):
+        # The contract between the two functions: what the endpoint hands out,
+        # POST /api/simulations must take back.
+        datasets = scan_datasets(self.data_dir)
+        self.assertTrue(datasets)
+        for dataset in datasets:
+            with self.subTest(path=dataset['path']):
+                self.assertEqual(
+                    resolve_dataset_path(dataset['path'], self.data_dir),
+                    os.path.realpath(
+                        os.path.join(self.data_dir, dataset['filename'])))
+
+    def test_relative_data_dir_yields_cwd_relative_paths_that_resolve(self):
+        # DATA_DIR defaults to './data', so 'path' is relative too.
+        cwd = os.getcwd()
+        try:
+            os.chdir(self.root)
+            datasets = scan_datasets('data')
+            self.assertEqual(
+                [d['path'] for d in datasets],
+                [os.path.join('data', 'elevation.tif'),
+                 os.path.join('data', 'fuel.tif'),
+                 os.path.join('data', 'nested', 'fuel.tif')])
+            for dataset in datasets:
+                resolve_dataset_path(dataset['path'], 'data')
+        finally:
+            os.chdir(cwd)
+
+    def test_type_is_classified_from_the_file_name(self):
+        by_name = {d['filename']: d['type'] for d in scan_datasets(self.data_dir)}
+        self.assertEqual(by_name['fuel.tif'], 'fuel')
+        self.assertEqual(by_name[os.path.join('nested', 'fuel.tif')], 'fuel')
+        self.assertEqual(by_name['elevation.tif'], 'elevation')
+
+    def test_directory_name_does_not_retype_the_files_inside_it(self):
+        os.makedirs(os.path.join(self.data_dir, 'fuel_rasters'))
+        target = os.path.join('fuel_rasters', 'elevation.tif')
+        with open(os.path.join(self.data_dir, target), 'w') as f:
+            f.write('x')
+        by_name = {d['filename']: d['type'] for d in scan_datasets(self.data_dir)}
+        self.assertEqual(by_name[target], 'elevation')
+
+    def test_size_is_reported(self):
+        sizes = {d['filename']: d['size'] for d in scan_datasets(self.data_dir)}
+        self.assertEqual(sizes['fuel.tif'], 1)  # fixture writes a single byte
+
+    def test_symlinked_directory_is_not_followed(self):
+        # <data>/escape points at <outside>, which holds secret.tif. Advertising
+        # it would hand out a path resolve_dataset_path rejects.
+        self.assertNotIn(os.path.join('escape', 'secret.tif'), self.names())
+
+    def test_hidden_directories_and_files_are_skipped(self):
+        os.makedirs(os.path.join(self.data_dir, '.cache'))
+        for path in (os.path.join(self.data_dir, '.cache', 'fuel.tif'),
+                     os.path.join(self.data_dir, '.hidden_fuel.tif')):
+            with open(path, 'w') as f:
+                f.write('x')
+        found = self.names()
+        self.assertNotIn(os.path.join('.cache', 'fuel.tif'), found)
+        self.assertNotIn('.hidden_fuel.tif', found)
+
+    def test_non_geotiff_files_are_ignored(self):
+        for name in ('notes.txt', 'config.json', 'fuel.tif.aux.xml'):
+            with open(os.path.join(self.data_dir, name), 'w') as f:
+                f.write('x')
+        self.assertEqual(len(scan_datasets(self.data_dir)), 3)
+
+    def test_tiff_and_uppercase_extensions_are_included(self):
+        for name in ('fuel_big.tiff', 'ELEVATION_BIG.TIF'):
+            with open(os.path.join(self.data_dir, name), 'w') as f:
+                f.write('x')
+        found = self.names()
+        self.assertIn('fuel_big.tiff', found)
+        self.assertIn('ELEVATION_BIG.TIF', found)
+
+    def test_missing_data_dir_returns_empty_list(self):
+        self.assertEqual(scan_datasets(os.path.join(self.root, 'no_such_dir')), [])
+
+    def test_data_dir_that_is_a_file_returns_empty_list(self):
+        self.assertEqual(
+            scan_datasets(os.path.join(self.data_dir, 'fuel.tif')), [])
 
 
 if __name__ == '__main__':

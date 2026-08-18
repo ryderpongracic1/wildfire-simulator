@@ -16,7 +16,7 @@ import subprocess
 import json
 import os
 
-from validation import ValidationError, validate_simulation_request
+from validation import ValidationError, scan_datasets, validate_simulation_request
 
 app = Flask(__name__)
 CORS(app)
@@ -278,24 +278,8 @@ def health_check():
 
 @app.route('/api/datasets', methods=['GET'])
 def list_datasets():
-    """List available fuel and elevation datasets"""
-    datasets = []
-
-    # Scan data directory for GeoTIFF files
-    if os.path.exists(DATA_DIR):
-        for filename in os.listdir(DATA_DIR):
-            if filename.endswith('.tif') or filename.endswith('.tiff'):
-                filepath = os.path.join(DATA_DIR, filename)
-                dataset_type = 'fuel' if 'fuel' in filename.lower() else 'elevation'
-
-                datasets.append({
-                    'filename': filename,
-                    'path': filepath,
-                    'type': dataset_type,
-                    'size': os.path.getsize(filepath)
-                })
-
-    return jsonify({'datasets': datasets})
+    """List available fuel and elevation datasets, at any depth under DATA_DIR"""
+    return jsonify({'datasets': scan_datasets(DATA_DIR)})
 
 
 @app.route('/api/simulations', methods=['POST'])

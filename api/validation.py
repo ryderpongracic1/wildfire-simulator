@@ -1,9 +1,12 @@
 """
-Request validation for the wildfire simulation API.
+Request validation and dataset discovery for the wildfire simulation API.
 
-Deliberately free of Flask, psycopg2, and any I/O beyond filesystem
-resolution, so it can be unit tested without the service or the database.
-Every failure raises ValidationError, which callers turn into an HTTP 400.
+Deliberately free of Flask, psycopg2, and any I/O beyond the filesystem, so it
+can be unit tested without the service or the database. Every validation
+failure raises ValidationError, which callers turn into an HTTP 400.
+
+Dataset discovery lives here next to resolve_dataset_path on purpose: the paths
+scan_datasets advertises must be paths resolve_dataset_path accepts.
 """
 
 import math
@@ -19,6 +22,9 @@ MAX_FUEL_MOISTURE_PERCENT = 100.0
 # not known without opening the dataset. This is a sanity cap; an in-range but
 # off-grid ignition point is the simulator's business.
 MAX_GRID_COORDINATE = 100000
+
+# File extensions GET /api/datasets advertises, matched case-insensitively.
+DATASET_EXTENSIONS = frozenset(('.tif', '.tiff'))
 
 REQUIRED_FIELDS = (
     'fuel_data_file',
@@ -103,6 +109,64 @@ def resolve_dataset_path(raw_path, data_dir):
         raise ValidationError(
             f'dataset path must resolve inside the data directory: {raw_path}')
     raise ValidationError(f'dataset file not found: {raw_path}')
+
+
+def scan_datasets(data_dir):
+    """Find the GeoTIFF datasets under data_dir, at any depth.
+
+    A flat os.listdir missed the sample data entirely, which ships in
+    data/sample/, so GET /api/datasets answered with an empty list on a fresh
+    checkout and the frontend's dataset dropdowns had nothing to offer.
+
+    Returns a list, sorted by 'filename', of:
+        {'filename': path relative to data_dir ('sample/fuel.tif'),
+         'path':     data_dir-rooted path, the value clients post back,
+         'type':     'fuel' or 'elevation',
+         'size':     bytes}
+
+    'path' is os.path.join(data_dir, filename) -- the same construction the
+    endpoint has always used for top-level files, just extended one level of
+    nesting. It stays a path resolve_dataset_path accepts whether data_dir is
+    absolute ('/app/data/sample/fuel.tif', an absolute path inside data_dir) or
+    relative ('./data/sample/fuel.tif', a path relative to the working
+    directory), which are two of the three forms it takes.
+
+    Hidden directories and hidden files are skipped, and symlinked directories
+    are not followed: a symlink out of data_dir would otherwise advertise a
+    path that resolve_dataset_path then rejects.
+    """
+    if not os.path.isdir(data_dir):
+        return []
+
+    datasets = []
+    for dirpath, dirnames, filenames in os.walk(data_dir):
+        # In-place, so os.walk skips these subtrees (.git, .ipynb_checkpoints).
+        dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+
+        for filename in filenames:
+            if filename.startswith('.'):
+                continue
+            if os.path.splitext(filename)[1].lower() not in DATASET_EXTENSIONS:
+                continue
+
+            relative = os.path.relpath(os.path.join(dirpath, filename), data_dir)
+            try:
+                size = os.path.getsize(os.path.join(dirpath, filename))
+            except OSError:
+                # Broken symlink, or the file went away mid-walk.
+                continue
+
+            datasets.append({
+                'filename': relative,
+                'path': os.path.join(data_dir, relative),
+                # Heuristic on the file name only, as before: a directory named
+                # 'fuel/' must not retype the elevation rasters inside it.
+                'type': 'fuel' if 'fuel' in filename.lower() else 'elevation',
+                'size': size,
+            })
+
+    datasets.sort(key=lambda dataset: dataset['filename'])
+    return datasets
 
 
 def validate_simulation_request(data, data_dir):
