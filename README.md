@@ -1,4 +1,4 @@
-# 🔥 Wildfire Spread Simulator
+# Wildfire Spread Simulator
 
 A high-performance wildfire spread simulation system that models fire behavior using real geospatial data, physics-based equations, and parallel computing. Simulate hours of wildfire spread in seconds.
 
@@ -6,17 +6,17 @@ A high-performance wildfire spread simulation system that models fire behavior u
 ![C++](https://img.shields.io/badge/C%2B%2B-17-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.9%2B-green.svg)
 
-## 🌟 Features
+## Features
 
-- **⚡ High-Performance Computing**: C++ simulation engine with a copy-free, OpenMP-parallel propagation step
-- **🌍 Real Geospatial Data**: Processes LANDFIRE fuel models and USGS elevation data (GeoTIFF format)
-- **🔬 Physics-Based Modeling**: Implements Rothermel fire spread equations with cellular automaton approach
-- **🎮 Interactive Visualization**: Web-based interface with real-time fire spread animation
-- **📊 Spatial Database**: PostgreSQL/PostGIS for efficient spatial queries and time-series analysis
-- **🐳 Docker Ready**: Complete containerized environment for easy deployment
-- **🌐 REST API**: Flask-based API for simulation control and data retrieval
+- **High-Performance Computing**: C++ simulation engine with a copy-free, OpenMP-parallel propagation step
+- **Real Geospatial Data**: Processes LANDFIRE fuel models and USGS elevation data (GeoTIFF format)
+- **Physics-Based Modeling**: Implements Rothermel fire spread equations with cellular automaton approach
+- **Interactive Visualization**: Web-based interface with real-time fire spread animation
+- **Spatial Database**: PostgreSQL/PostGIS for efficient spatial queries and time-series analysis
+- **Docker Ready**: Complete containerized environment for easy deployment
+- **REST API**: Flask-based API for simulation control and data retrieval
 
-## 📸 Demo
+## Demo
 
 The simulator provides:
 - Real-time fire perimeter visualization
@@ -24,7 +24,7 @@ The simulator provides:
 - Statistical analysis (burned area, spread rate, etc.)
 - Interactive map with terrain layers
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 ┌─────────────────────┐
@@ -48,7 +48,7 @@ The simulator provides:
 └─────────────────────┘
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Using Docker (Recommended)
 
@@ -114,7 +114,7 @@ cd frontend
 python -m http.server 8080
 ```
 
-## 📊 Data Acquisition
+## Data Acquisition
 
 The simulator requires two types of geospatial data:
 
@@ -142,7 +142,7 @@ python generate_test_data.py
 
 This creates small test datasets you can use to try the simulator without downloading real data.
 
-## 🎮 Usage
+## Usage
 
 ### Web Interface
 
@@ -207,7 +207,7 @@ status = requests.get(f"{API_BASE}/simulations/{run_id}").json()
 print(f"Status: {status['status']}")
 ```
 
-## 🔧 Technologies Used
+## Technologies Used
 
 ### Core Simulation Engine
 - **C++17**: High-performance computation
@@ -238,7 +238,7 @@ print(f"Status: {status['status']}")
 - **Docker Compose**: Multi-container orchestration
 - **Nginx**: Web server (in Docker setup)
 
-## ⚡ Performance
+## Performance
 
 Measured on a 4-core Linux x86-64 box (GCC 11, `-O3 -march=native`), grid 500×500
 cells, 120 time steps (2 hours simulated), grass fuel, 15 mph wind:
@@ -257,7 +257,7 @@ g++ -O3 -march=native -fopenmp -Icpp/include \
     cpp/tests/model_test.cpp cpp/src/FireSpreadModel.cpp -o model_test && ./model_test
 ```
 
-## 📡 API Endpoints
+## API Endpoints
 
 ### Core Endpoints
 
@@ -273,7 +273,7 @@ g++ -O3 -march=native -fopenmp -Icpp/include \
 
 See [API Documentation](docs/API.md) for detailed request/response schemas.
 
-## 🔬 Fire Physics Model
+## Fire Physics Model
 
 The simulator implements the **Rothermel fire spread model** on a cellular
 automaton using **deterministic time-of-arrival propagation**: a cell ignites
@@ -303,7 +303,7 @@ Factors shaping the spread rate:
    - Higher moisture = slower spread
    - Critical thresholds vary by fuel type
 
-## 🗂️ Project Structure
+## Project Structure
 
 ```
 wildfire-simulator/
@@ -332,7 +332,7 @@ wildfire-simulator/
 └── docs/                  # Documentation
 ```
 
-## 🧪 Tests
+## Tests
 
 The model core has a physics regression suite (`cpp/tests/model_test.cpp`, no
 GDAL or database dependency). It pins the properties that matter: wind
@@ -346,7 +346,7 @@ cd cpp && mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release .. && make model_test && ctest
 ```
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -389,28 +389,28 @@ works, just slower. Switching images means a Postgres data directory built by
 one and read by the other, so `docker compose down -v` if the database refuses
 to start.
 
-## 📚 Scientific References
+## Scientific References
 
 1. Rothermel, R.C. (1972). "A Mathematical Model for Predicting Fire Spread in Wildland Fuels". USDA Forest Service Research Paper INT-115.
 2. Albini, F.A. (1976). "Computer-Based Models of Wildland Fire Behavior". USDA Forest Service.
 3. Anderson, H.E. (1982). "Aids to Determining Fuel Models for Estimating Fire Behavior". USDA Forest Service General Technical Report INT-122.
 
-## 📄 License
+## License
 
 MIT License - See [LICENSE](LICENSE) file for details.
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **LANDFIRE Program** for providing fuel model datasets
 - **USGS** for elevation data
 - **OpenMP** community for parallel computing support
 - **GDAL/OGR** contributors for geospatial data handling
 
-## 📬 Contact
+## Contact
 
 For questions or feedback, please open an issue on GitHub.
 
